@@ -1,0 +1,21 @@
+on:
+  push:
+    branches:
+      - master
+
+name: Build
+
+jobs:
+  release:
+    name: Build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 'Build'
+        run: cargo build --release
+      - name: 'Upload'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PoeMacro
+          path: target/release/*.exe
