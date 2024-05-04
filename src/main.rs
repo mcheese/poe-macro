@@ -3,24 +3,36 @@ use windows::core::*;
 use windows::Win32::Foundation::*;
 
 // process image names to disconnect
-// saving names in cringe format instead of converting results later
-const PROCESS_NAMES: &[PCSTR] = &[
-    PCSTR("PathOfExile.exe\0".as_ptr()),
-    PCSTR("PathOfExileSteam.exe\0".as_ptr()),
-];
+// save as PCSTR to avoid converting later
+const PROCESS_NAMES: &[PCSTR] = &[s!("PathOfExile.exe"), s!("PathOfExileSteam.exe")];
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
+
+// exit with notification on error
+macro_rules! report_error {
+    ($e:expr) => {
+        if let Err(err) = $e {
+            error_and_exit(
+                err.to_string(),
+                format!(
+                    "in: {} @ {}:{}:{}",
+                    stringify!($e),
+                    file!(),
+                    line!(),
+                    column!()
+                ),
+            );
+        } else {
+        }
+    };
+}
 
 fn main() -> Result<()> {
     println!("hello");
 
-    if let Err(err) = enable_debug_priv() {
-        error_and_exit(format!("Enable Debug Privilege\n\n{}", err.to_string()));
-    }
+    report_error!(enable_debug_priv());
 
-    if let Err(err) = disconnect() {
-        error_and_exit(format!("Disconnecting\n\n{}", err.to_string()));
-    }
+    report_error!(disconnect());
 
     println!("goodbye");
 
@@ -33,13 +45,16 @@ fn disconnect() -> Result<()> {
     Ok(())
 }
 
-// display and error messagebox and exit
-fn error_and_exit(message: String) -> () {
-    use windows::Win32::UI::WindowsAndMessaging::*;
-
-    unsafe {
-        MessageBoxA(None, PCSTR(message.as_ptr()), s!("POE-Macro"), MB_ICONERROR);
-    }
+// display notification and exit
+fn error_and_exit(text1: String, text2: String) -> () {
+    use winrt_notification::{Duration, Toast};
+    Toast::new(Toast::POWERSHELL_APP_ID)
+        .title("POE-Macro Error")
+        .text1(text1.as_str())
+        .text2(text2.as_str())
+        .duration(Duration::Long)
+        .show()
+        .expect("notification failed");
 
     std::process::exit(-1);
 }
@@ -143,12 +158,10 @@ fn enable_debug_priv() -> Result<()> {
         }],
     };
 
-    let privilege = "SeDebugPrivilege\0";
-
     unsafe {
         LookupPrivilegeValueA(
             PCSTR::null(),
-            PCSTR(privilege.as_ptr()),
+            s!("SeDebugPrivilege"),
             &mut tp.Privileges[0].Luid,
         )?;
 
