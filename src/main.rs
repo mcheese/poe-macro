@@ -1,4 +1,6 @@
-use std::error;
+mod helper;
+
+use helper::*;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 
@@ -6,31 +8,12 @@ use windows::Win32::Foundation::*;
 // save as PCSTR to avoid converting later
 const PROCESS_NAMES: &[PCSTR] = &[s!("PathOfExile.exe"), s!("PathOfExileSteam.exe")];
 
-type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
-
-// exit with notification on error
-macro_rules! report_error {
-    ($e:expr) => {
-        if let Err(err) = $e {
-            error_and_exit(
-                err.to_string(),
-                format!(
-                    "in: {} @ {}:{}:{}",
-                    stringify!($e),
-                    file!(),
-                    line!(),
-                    column!()
-                ),
-            );
-        } else {
-        }
-    };
-}
-
 fn main() -> Result<()> {
     println!("hello");
 
     report_error!(enable_debug_priv());
+
+    report_error!(register_hotkey());
 
     report_error!(disconnect());
 
@@ -39,24 +22,26 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn register_hotkey() -> Result<()> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    unsafe {
+        RegisterHotKey(HWND(0), 0, HOT_KEY_MODIFIERS(0), VK_A.0 as _)?;
+    }
+
+    let mut msg = MSG::default();
+    while unsafe { GetMessageW(&mut msg, HWND(0), WM_NULL, WM_HOTKEY).as_bool() } {
+        disconnect()?;
+    }
+
+    Ok(())
+}
+
 fn disconnect() -> Result<()> {
     let pids = find_pids()?;
     close_connections(&pids)?;
     Ok(())
-}
-
-// display notification and exit
-fn error_and_exit(text1: String, text2: String) -> () {
-    use winrt_notification::{Duration, Toast};
-    Toast::new(Toast::POWERSHELL_APP_ID)
-        .title("POE-Macro Error")
-        .text1(text1.as_str())
-        .text2(text2.as_str())
-        .duration(Duration::Long)
-        .show()
-        .expect("notification failed");
-
-    std::process::exit(-1);
 }
 
 // get all PIDs using a name from PROCESS_NAMES
