@@ -1,38 +1,38 @@
 // some helper functions
 
 // generic return type with boxed error
-//pub type MyResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub type MyResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 // exit with notification on error
-macro_rules! report_error {
+macro_rules! exit_on_error {
     ($e:expr) => {
         if let Err(err) = $e {
-            error_and_exit(
-                err.to_string(),
+            error_toast(
+                err.to_string().as_str(),
                 format!(
                     "in: {} @ {}:{}:{}",
                     stringify!($e),
                     file!(),
                     line!(),
                     column!()
-                ),
+                )
+                .as_str(),
             );
+            std::process::exit(-1);
         } else {
         }
     };
 }
-pub(crate) use report_error;
+pub(crate) use exit_on_error;
 
-// display notification and exit
-pub fn error_and_exit(text1: String, text2: String) -> () {
+// display notification toast
+pub fn error_toast(text1: &str, text2: &str) -> () {
     use winrt_notification::{Duration, Toast};
     Toast::new(Toast::POWERSHELL_APP_ID)
         .title("POE-Macro Error")
-        .text1(text1.as_str())
-        .text2(text2.as_str())
+        .text1(text1)
+        .text2(text2)
         .duration(Duration::Long)
         .show()
         .expect("notification failed");
-
-    std::process::exit(-1);
 }

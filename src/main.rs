@@ -1,38 +1,87 @@
+mod config;
 mod helper;
 
 use helper::*;
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 
-// process image names to disconnect
-// save as PCSTR to avoid converting later
-const PROCESS_NAMES: &[PCSTR] = &[s!("PathOfExile.exe"), s!("PathOfExileSteam.exe")];
+fn main() -> MyResult<()> {
+    println!("POE-Macro");
 
-fn main() -> Result<()> {
-    println!("hello");
+    exit_on_error!(enable_debug_priv());
 
-    report_error!(enable_debug_priv());
+    exit_on_error!(run());
 
-    report_error!(register_hotkey());
-
-    report_error!(disconnect());
-
-    println!("goodbye");
+    error_toast("ALL GOOD", "bye");
 
     Ok(())
 }
 
-fn register_hotkey() -> Result<()> {
+fn run() -> MyResult<()> {
+    let thread_id = Arc::new(AtomicU32::new(0));
+    let thread_handle = {
+        let thread_id_clone = thread_id.clone();
+        std::thread::spawn(move || hotkey_thread(thread_id_clone))
+    };
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    post_quit_message(thread_id.load(Ordering::Relaxed))?;
+    thread_handle.join().expect("worker thread panicked")?;
+
+    Ok(())
+}
+
+fn post_quit_message(thread_id: u32) -> MyResult<()> {
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    if thread_id == 0 {
+        return Err("invalid thread ID".into());
+    }
+
+    unsafe {
+        PostThreadMessageA(thread_id, WM_QUIT, WPARAM::default(), LPARAM::default())?;
+    };
+
+    Ok(())
+}
+
+fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> Result<()> {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
     use windows::Win32::UI::WindowsAndMessaging::*;
 
-    unsafe {
-        RegisterHotKey(HWND(0), 0, HOT_KEY_MODIFIERS(0), VK_A.0 as _)?;
+    let thread_id = unsafe { GetCurrentThreadId() };
+    thread_id_atomic.store(thread_id, Ordering::Relaxed);
+
+    // register keybinds
+    for (i, key) in config::DISCONNECT_KEYBINDS.iter().enumerate() {
+        unsafe {
+            RegisterHotKey(HWND(0), i as _, HOT_KEY_MODIFIERS(0), key.0 as _)?;
+        }
     }
 
+    // message loop, ends on WM_QUIT
     let mut msg = MSG::default();
     while unsafe { GetMessageW(&mut msg, HWND(0), WM_NULL, WM_HOTKEY).as_bool() } {
-        disconnect()?;
+        if let Err(e) = disconnect() {
+            error_toast(e.to_string().as_str(), "during disconnect()");
+        }
+        println!("[DISCONNECT]");
+    }
+
+    // unregister keybinds
+    for i in 0..config::DISCONNECT_KEYBINDS.len() {
+        unsafe {
+            UnregisterHotKey(HWND(0), i as _)?;
+        }
     }
 
     Ok(())
@@ -47,7 +96,7 @@ fn disconnect() -> Result<()> {
 // get all PIDs using a name from PROCESS_NAMES
 fn find_pids() -> Result<Vec<u32>> {
     use std::mem::size_of;
-    use windows::Win32::Globalization::lstrcmpA;
+    use windows::Win32::Globalization::lstrcmpiA;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
     };
@@ -64,7 +113,10 @@ fn find_pids() -> Result<Vec<u32>> {
             while Process32Next(snapshot, &mut process).is_ok() {
                 let name = PCSTR(process.szExeFile.as_ptr() as _);
                 // using windows compare function to avoid reencoding the string
-                if PROCESS_NAMES.iter().any(|&s| lstrcmpA(s, name) == 0) {
+                if config::PROCESS_NAMES
+                    .iter()
+                    .any(|&s| lstrcmpiA(s, name) == 0)
+                {
                     pids.push(process.th32ProcessID);
                 }
             }
