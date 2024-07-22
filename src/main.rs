@@ -1,42 +1,71 @@
+#![windows_subsystem = "windows"]
+
 mod config;
 mod helper;
+mod tray_icon;
 
 use helper::*;
-use windows::core::*;
-use windows::Win32::Foundation::*;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
 };
+use windows::core::*;
+use windows::Win32::Foundation::*;
 
-fn main() -> MyResult<()> {
+fn main() {
+    exit_on_error!(run());
+}
+
+fn run() -> MyResult<()> {
+    // alloc new console and hide it, to allow toggle later
+    unsafe {
+        use windows::Win32::System::Console::*;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        AllocConsole()?;
+        ShowWindow(GetConsoleWindow(), SHOW_WINDOW_CMD(0));
+    }
+
     println!("POE-Macro");
 
+    // permission needed to disconnect
     exit_on_error!(enable_debug_priv());
 
-    exit_on_error!(run());
+    let tray_icon = tray_icon::MyTrayIcon::build()?;
+    let hotkey_thread = HotkeyThread::build()?;
 
-    error_toast("ALL GOOD", "bye");
+    info_toast("Running!", "");
+
+    exit_on_error!(tray_icon.run(hotkey_thread));
+
+    info_toast("Closing!", "bye");
 
     Ok(())
 }
 
-fn run() -> MyResult<()> {
-    let thread_id = Arc::new(AtomicU32::new(0));
-    let thread_handle = {
-        let thread_id_clone = thread_id.clone();
-        std::thread::spawn(move || hotkey_thread(thread_id_clone))
-    };
+struct HotkeyThread {
+    thread_id: Arc<AtomicU32>,
+    thread_handle: std::thread::JoinHandle<windows::core::Result<()>>,
+}
 
-    std::thread::sleep(std::time::Duration::from_secs(1));
+impl HotkeyThread {
+    fn build() -> MyResult<Self> {
+        let thread_id = Arc::new(AtomicU32::new(0));
+        let thread_handle = {
+            let thread_id_clone = thread_id.clone();
+            std::thread::spawn(move || hotkey_thread(thread_id_clone))
+        };
 
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
+        Ok(Self {
+            thread_id,
+            thread_handle,
+        })
+    }
 
-    post_quit_message(thread_id.load(Ordering::Relaxed))?;
-    thread_handle.join().expect("worker thread panicked")?;
-
-    Ok(())
+    fn stop(self) -> MyResult<()> {
+        post_quit_message(self.thread_id.load(Ordering::Relaxed))?;
+        self.thread_handle.join().expect("worker thread panicked")?;
+        Ok(())
+    }
 }
 
 fn post_quit_message(thread_id: u32) -> MyResult<()> {
@@ -53,7 +82,7 @@ fn post_quit_message(thread_id: u32) -> MyResult<()> {
     Ok(())
 }
 
-fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> Result<()> {
+fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
     use windows::Win32::UI::WindowsAndMessaging::*;
@@ -87,14 +116,14 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> Result<()> {
     Ok(())
 }
 
-fn disconnect() -> Result<()> {
+fn disconnect() -> MyResult<()> {
     let pids = find_pids()?;
     close_connections(&pids)?;
     Ok(())
 }
 
 // get all PIDs using a name from PROCESS_NAMES
-fn find_pids() -> Result<Vec<u32>> {
+fn find_pids() -> MyResult<Vec<u32>> {
     use std::mem::size_of;
     use windows::Win32::Globalization::lstrcmpiA;
     use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -129,7 +158,7 @@ fn find_pids() -> Result<Vec<u32>> {
 }
 
 // close all connections of all passed PIDs
-fn close_connections(pids: &[u32]) -> Result<()> {
+fn close_connections(pids: &[u32]) -> MyResult<()> {
     use windows::Win32::{NetworkManagement::IpHelper::*, System::Memory::*};
 
     unsafe {
@@ -179,7 +208,7 @@ fn close_connections(pids: &[u32]) -> Result<()> {
     Ok(())
 }
 
-fn enable_debug_priv() -> Result<()> {
+fn enable_debug_priv() -> MyResult<()> {
     use std::mem::size_of;
     use windows::Win32::Security::{
         AdjustTokenPrivileges, LookupPrivilegeValueA, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
