@@ -6,4 +6,6 @@ PoE Disconnect Macro
 
 Path of Exile disconnect macro written in Rust. Maybe some other features too.
 
-**DO NOT USE**. Literally just starting to develop.
+**DO NOT USE**. Currently just building it for myself.
+
+[Download latest version](https://nightly.link/mcheese/poe-macro/workflows/build.yaml/master/PoeMacro.zip)
