@@ -1,4 +1,5 @@
-[![Check](https://github.com/mcheese/poe-macro/actions/workflows/check.yaml/badge.svg)](https://github.com/mcheese/poe-macro/actions/workflows/check.yaml) [![Build](https://github.com/mcheese/poe-macro/actions/workflows/build.yaml/badge.svg)](https://github.com/mcheese/poe-macro/actions/workflows/build.yaml)
+[![Build](https://github.com/mcheese/poe-macro/actions/workflows/build.yaml/badge.svg?branch=master)](https://github.com/mcheese/poe-macro/actions/workflows/build.yaml)
+[![Check](https://github.com/mcheese/poe-macro/actions/workflows/check.yaml/badge.svg?branch=master)](https://github.com/mcheese/poe-macro/actions/workflows/check.yaml) 
 
 PoE Disconnect Macro
 ---------
