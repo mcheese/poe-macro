@@ -11,6 +11,7 @@ use std::sync::{
 };
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 fn main() {
     exit_on_error!(run());
@@ -63,7 +64,10 @@ impl HotkeyThread {
 
     fn stop(self) -> MyResult<()> {
         post_quit_message(self.thread_id.load(Ordering::Relaxed))?;
-        self.thread_handle.join().expect("worker thread panicked")?;
+        match self.thread_handle.join() {
+            Ok(res) => res?,
+            Err(_) => return Err("worker thread panicked".into()),
+        }
         Ok(())
     }
 }
@@ -84,11 +88,12 @@ fn post_quit_message(thread_id: u32) -> MyResult<()> {
 
 fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> {
     use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::Input::KeyboardAndMouse::*;
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     let thread_id = unsafe { GetCurrentThreadId() };
     thread_id_atomic.store(thread_id, Ordering::Relaxed);
+
+    let first_text_macro_id = config::DISCONNECT_KEYBINDS.len();
 
     // register keybinds
     for (i, key) in config::DISCONNECT_KEYBINDS.iter().enumerate() {
@@ -96,27 +101,58 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> 
             RegisterHotKey(HWND(0), i as _, HOT_KEY_MODIFIERS(0), key.0 as _)?;
         }
     }
+    for (i, (key, _)) in config::TEXT_MACROS.iter().enumerate() {
+        unsafe {
+            RegisterHotKey(
+                HWND(0),
+                (i + first_text_macro_id) as _,
+                HOT_KEY_MODIFIERS(0),
+                key.0 as _,
+            )?;
+        }
+    }
 
     // message loop, ends on WM_QUIT
     let mut msg = MSG::default();
     while unsafe { GetMessageW(&mut msg, HWND(0), WM_NULL, WM_HOTKEY).as_bool() } {
+        if msg.message != WM_HOTKEY {
+            continue;
+        }
+
         let hotkey_id = msg.wParam.0;
 
-        match disconnect() {
-            Err(e) => {
-                println!("[DISCONNECT] error: {}", e.to_string());
-                error_toast(e.to_string().as_str(), "during disconnect");
+        if hotkey_id < first_text_macro_id {
+            match disconnect() {
+                Err(e) => {
+                    println!("[DISCONNECT] error: {}", e.to_string());
+                    error_toast(e.to_string().as_str(), "during disconnect");
+                }
+                _ => {
+                    println!("[DISCONNECT]");
+                }
             }
-            _ => {
-                println!("[DISCONNECT]");
+        } else {
+            if window_is_poe() {
+                if let Some((_, text)) = config::TEXT_MACROS.get(hotkey_id - first_text_macro_id) {
+                    send_command(text);
+                    println!("[COMMAND] {}", text);
+                }
+            } else {
+                println!("[COMMAND] skipped, POE not focused");
             }
         }
 
         // resend the key
-        if let Some(k) = config::DISCONNECT_KEYBINDS.get(hotkey_id) {
+        if let Some(k) = if hotkey_id < first_text_macro_id {
+            config::DISCONNECT_KEYBINDS.get(hotkey_id)
+        } else {
+            config::TEXT_MACROS
+                .get(hotkey_id - first_text_macro_id)
+                .map(|(k, _)| k)
+        } {
             // un-register the hotkey to avoid recursion
             if unsafe { UnregisterHotKey(HWND(0), hotkey_id as _).is_ok() } {
-                let _ = send_input_vk(*k);
+                send_input_vk(*k);
                 unsafe {
                     RegisterHotKey(HWND(0), hotkey_id as _, HOT_KEY_MODIFIERS(0), k.0 as _)?;
                 }
@@ -126,18 +162,100 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> 
     // message loop ended, clean up
 
     // unregister keybinds
-    for i in 0..config::DISCONNECT_KEYBINDS.len() {
+    for (i, _) in config::DISCONNECT_KEYBINDS.iter().enumerate() {
         unsafe {
-            UnregisterHotKey(HWND(0), i as _)?;
+            _ = UnregisterHotKey(HWND(0), i as _);
+        }
+    }
+    for (i, _) in config::TEXT_MACROS.iter().enumerate() {
+        unsafe {
+            _ = UnregisterHotKey(HWND(0), (i + first_text_macro_id) as _);
         }
     }
 
     Ok(())
 }
 
-fn send_input_vk(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> MyResult<()> {
-    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+fn send_command(text: &str) {
+    send_input_vk(VK_RETURN);
+    for ch in text.chars() {
+        match char_to_vk(ch) {
+            None => println!("[COMMAND] unsupported char: {}", ch),
+            Some(vk) => send_input_vk(vk),
+        }
+    }
+    send_input_vk(VK_RETURN);
+}
 
+fn window_is_poe() -> bool {
+    use windows::Win32::Globalization::lstrcmpiA;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    let fg_window = unsafe { GetForegroundWindow() };
+    if fg_window.0 == 0 {
+        return false;
+    } else {
+        let mut buf: [u8; 256] = [0; 256];
+        let len = unsafe { GetWindowTextA(fg_window, &mut buf) };
+        buf[255] = 0; // ensure null termination
+        return len > 0 && unsafe { lstrcmpiA(PCSTR(buf.as_ptr()), config::POE_WINDOW_TITLE) == 0 };
+    }
+}
+
+fn char_to_vk(ch: char) -> Option<VIRTUAL_KEY> {
+    match ch {
+        'a' | 'A' => Some(VK_A),
+        'b' | 'B' => Some(VK_B),
+        'c' | 'C' => Some(VK_C),
+        'd' | 'D' => Some(VK_D),
+        'e' | 'E' => Some(VK_E),
+        'f' | 'F' => Some(VK_F),
+        'g' | 'G' => Some(VK_G),
+        'h' | 'H' => Some(VK_H),
+        'i' | 'I' => Some(VK_I),
+        'j' | 'J' => Some(VK_J),
+        'k' | 'K' => Some(VK_K),
+        'l' | 'L' => Some(VK_L),
+        'm' | 'M' => Some(VK_M),
+        'n' | 'N' => Some(VK_N),
+        'o' | 'O' => Some(VK_O),
+        'p' | 'P' => Some(VK_P),
+        'q' | 'Q' => Some(VK_Q),
+        'r' | 'R' => Some(VK_R),
+        's' | 'S' => Some(VK_S),
+        't' | 'T' => Some(VK_T),
+        'u' | 'U' => Some(VK_U),
+        'v' | 'V' => Some(VK_V),
+        'w' | 'W' => Some(VK_W),
+        'x' | 'X' => Some(VK_X),
+        'y' | 'Y' => Some(VK_Y),
+        'z' | 'Z' => Some(VK_Z),
+        '0' => Some(VK_0),
+        '1' => Some(VK_1),
+        '2' => Some(VK_2),
+        '3' => Some(VK_3),
+        '4' => Some(VK_4),
+        '5' => Some(VK_5),
+        '6' => Some(VK_6),
+        '7' => Some(VK_7),
+        '8' => Some(VK_8),
+        '9' => Some(VK_9),
+        ' ' => Some(VK_SPACE),
+        '/' => Some(VK_OEM_2), // US layout
+        '.' => Some(VK_OEM_PERIOD),
+        ',' => Some(VK_OEM_COMMA),
+        ';' => Some(VK_OEM_1),
+        '\'' => Some(VK_OEM_7),
+        '[' => Some(VK_OEM_4),
+        ']' => Some(VK_OEM_6),
+        '\\' => Some(VK_OEM_5),
+        '-' => Some(VK_OEM_MINUS),
+        '=' => Some(VK_OEM_PLUS),
+        _ => None,
+    }
+}
+
+fn send_input_vk(vk: VIRTUAL_KEY) {
     // key down
     let down = INPUT {
         r#type: INPUT_KEYBOARD,
@@ -168,13 +286,7 @@ fn send_input_vk(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -
 
     let mut inputs = [down, up];
 
-    // SendInput returns number of events successfully inserted
-    let sent = unsafe { SendInput(&mut inputs, size_of::<INPUT>() as i32) };
-    if sent != inputs.len() as u32 {
-        return Err("SendInput failed to send all events".into());
-    }
-
-    Ok(())
+    _ = unsafe { SendInput(&mut inputs, size_of::<INPUT>() as i32) };
 }
 
 fn disconnect() -> MyResult<()> {
@@ -269,6 +381,7 @@ fn close_connections(pids: &[u32]) -> MyResult<()> {
     Ok(())
 }
 
+// Enables the SeDebugPrivilege for the current process, allowing it to debug and manipulate other processes.
 fn enable_debug_priv() -> MyResult<()> {
     use std::mem::size_of;
     use windows::Win32::Security::{
