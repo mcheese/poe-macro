@@ -100,17 +100,78 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> 
     // message loop, ends on WM_QUIT
     let mut msg = MSG::default();
     while unsafe { GetMessageW(&mut msg, HWND(0), WM_NULL, WM_HOTKEY).as_bool() } {
-        if let Err(e) = disconnect() {
-            error_toast(e.to_string().as_str(), "during disconnect()");
+        let hotkey_id = msg.wParam.0;
+
+        match disconnect() {
+            Err(e) => {
+                println!("[DISCONNECT] error: {}", e.to_string());
+                error_toast(e.to_string().as_str(), "during disconnect");
+            }
+            _ => {
+                println!("[DISCONNECT]");
+            }
         }
-        println!("[DISCONNECT]");
+
+        // resend the key
+        if let Some(k) = config::DISCONNECT_KEYBINDS.get(hotkey_id) {
+            // un-register the hotkey to avoid recursion
+            if unsafe { UnregisterHotKey(HWND(0), hotkey_id as _).is_ok() } {
+                let _ = send_input_vk(*k);
+                unsafe {
+                    RegisterHotKey(HWND(0), hotkey_id as _, HOT_KEY_MODIFIERS(0), k.0 as _)?;
+                }
+            }
+        }
     }
+    // message loop ended, clean up
 
     // unregister keybinds
     for i in 0..config::DISCONNECT_KEYBINDS.len() {
         unsafe {
             UnregisterHotKey(HWND(0), i as _)?;
         }
+    }
+
+    Ok(())
+}
+
+fn send_input_vk(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> MyResult<()> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+
+    // key down
+    let down = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: KEYBD_EVENT_FLAGS(0),
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+
+    // key up
+    let up = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+
+    let mut inputs = [down, up];
+
+    // SendInput returns number of events successfully inserted
+    let sent = unsafe { SendInput(&mut inputs, size_of::<INPUT>() as i32) };
+    if sent != inputs.len() as u32 {
+        return Err("SendInput failed to send all events".into());
     }
 
     Ok(())
