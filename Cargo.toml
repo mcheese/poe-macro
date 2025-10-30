@@ -1,18 +1,22 @@
 [package]
 name = "poe-macro"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 build = "build.rs"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package.metadata.winres]
+ProductName = "POE-Macro"
+OriginalFilename = "poe-macro.exe"
+FileDescription = "POE-Macro"
+LegalCopyright = "Cheese (c) 2025"
 
 [dependencies]
-tray-icon = "0.14.3"
-windows = { version = "0.54.0", features = [ "Win32_NetworkManagement_IpHelper",
+tray-icon = "0.21.2"
+windows = { version = ">=0.62", features = [ "Win32_NetworkManagement_IpHelper",
 "Win32_System_Memory", "Win32_Foundation", "Win32_System_Diagnostics_ToolHelp",
 "Win32_Globalization", "Win32_Security", "Win32_System_Threading",
 "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Console" ] }
-winit = "0.30.4"
+winit = "0.30.12"
 winrt-notification = "0.5.1"
 
 [build-dependencies]

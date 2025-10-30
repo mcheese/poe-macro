@@ -23,7 +23,7 @@ fn run() -> MyResult<()> {
         use windows::Win32::System::Console::*;
         use windows::Win32::UI::WindowsAndMessaging::*;
         AllocConsole()?;
-        ShowWindow(GetConsoleWindow(), SHOW_WINDOW_CMD(0));
+        _ = ShowWindow(GetConsoleWindow(), SHOW_WINDOW_CMD(0));
     }
 
     println!("POE-Macro");
@@ -98,13 +98,13 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> 
     // register keybinds
     for (i, key) in config::DISCONNECT_KEYBINDS.iter().enumerate() {
         unsafe {
-            RegisterHotKey(HWND(0), i as _, HOT_KEY_MODIFIERS(0), key.0 as _)?;
+            RegisterHotKey(None, i as _, HOT_KEY_MODIFIERS(0), key.0 as _)?;
         }
     }
     for (i, (key, _)) in config::TEXT_MACROS.iter().enumerate() {
         unsafe {
             RegisterHotKey(
-                HWND(0),
+                None,
                 (i + first_text_macro_id) as _,
                 HOT_KEY_MODIFIERS(0),
                 key.0 as _,
@@ -114,7 +114,7 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> 
 
     // message loop, ends on WM_QUIT
     let mut msg = MSG::default();
-    while unsafe { GetMessageW(&mut msg, HWND(0), WM_NULL, WM_HOTKEY).as_bool() } {
+    while unsafe { GetMessageW(&mut msg, None, WM_NULL, WM_HOTKEY).as_bool() } {
         if msg.message != WM_HOTKEY {
             continue;
         }
@@ -151,10 +151,10 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> 
                 .map(|(k, _)| k)
         } {
             // un-register the hotkey to avoid recursion
-            if unsafe { UnregisterHotKey(HWND(0), hotkey_id as _).is_ok() } {
+            if unsafe { UnregisterHotKey(None, hotkey_id as _).is_ok() } {
                 send_input_vk(*k);
                 unsafe {
-                    RegisterHotKey(HWND(0), hotkey_id as _, HOT_KEY_MODIFIERS(0), k.0 as _)?;
+                    RegisterHotKey(None, hotkey_id as _, HOT_KEY_MODIFIERS(0), k.0 as _)?;
                 }
             }
         }
@@ -164,12 +164,12 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> 
     // unregister keybinds
     for (i, _) in config::DISCONNECT_KEYBINDS.iter().enumerate() {
         unsafe {
-            _ = UnregisterHotKey(HWND(0), i as _);
+            _ = UnregisterHotKey(None, i as _);
         }
     }
     for (i, _) in config::TEXT_MACROS.iter().enumerate() {
         unsafe {
-            _ = UnregisterHotKey(HWND(0), (i + first_text_macro_id) as _);
+            _ = UnregisterHotKey(None, (i + first_text_macro_id) as _);
         }
     }
 
@@ -192,7 +192,7 @@ fn window_is_poe() -> bool {
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     let fg_window = unsafe { GetForegroundWindow() };
-    if fg_window.0 == 0 {
+    if fg_window.is_invalid() {
         return false;
     } else {
         let mut buf: [u8; 256] = [0; 256];
@@ -342,7 +342,7 @@ fn close_connections(pids: &[u32]) -> MyResult<()> {
 
         // retry getting table with adjusted size
         if err == ERROR_INSUFFICIENT_BUFFER.0 {
-            _ = LocalFree(buffer);
+            _ = LocalFree(Some(buffer));
             buffer = LocalAlloc(LPTR, bytes_required as _)?;
             err = GetTcpTable2(Some(buffer.0 as *mut _), &mut bytes_required, false);
         }
@@ -375,7 +375,7 @@ fn close_connections(pids: &[u32]) -> MyResult<()> {
             }
         }
 
-        _ = LocalFree(buffer);
+        _ = LocalFree(Some(buffer));
     }
 
     Ok(())
