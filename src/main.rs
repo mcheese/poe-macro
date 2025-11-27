@@ -11,6 +11,9 @@ use std::sync::{
 };
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 fn main() {
@@ -177,14 +180,71 @@ fn hotkey_thread(thread_id_atomic: Arc<AtomicU32>) -> windows::core::Result<()> 
 }
 
 fn send_command(text: &str) {
-    send_input_vk(VK_RETURN);
-    for ch in text.chars() {
-        match char_to_vk(ch) {
-            None => println!("[COMMAND] unsupported char: {}", ch),
-            Some(vk) => send_input_vk(vk),
+    use std::ffi::CString;
+    use windows::Win32::Foundation::{HANDLE, HGLOBAL};
+    use windows::Win32::System::DataExchange::GetClipboardData;
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+    let mut old_data: Option<Vec<u8>> = None;
+    unsafe {
+        if OpenClipboard(None).is_ok() {
+            // Save old clipboard content (CF_TEXT)
+            let handle = GetClipboardData(1);
+            if let Ok(h) = handle {
+                let ptr = GlobalLock(HGLOBAL(h.0));
+                if !ptr.is_null() {
+                    // Find length of null-terminated string
+                    let mut len = 0;
+                    while *(ptr.add(len) as *const u8) != 0 {
+                        len += 1;
+                    }
+                    let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+                    old_data = Some(slice.to_vec());
+                    _ = GlobalUnlock(HGLOBAL(h.0));
+                }
+            }
+
+            EmptyClipboard().ok();
+
+            // Allocate global memory and copy the text
+            let c_text = CString::new(text).unwrap();
+            let text_len = (c_text.as_bytes().len() + 1) as usize;
+            let h_mem = GlobalAlloc(GMEM_MOVEABLE, text_len).unwrap();
+            let ptr = GlobalLock(h_mem);
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(c_text.as_ptr(), ptr as *mut i8, text_len);
+                _ = GlobalUnlock(h_mem);
+                _ = SetClipboardData(1, Some(HANDLE(h_mem.0))); // Convert HGLOBAL to HANDLE
+            }
+            CloseClipboard().ok();
         }
     }
+
+    // Enter to open chat, Ctrl+V to paste, Enter to send
     send_input_vk(VK_RETURN);
+    send_input_ctrl_v();
+    send_input_vk(VK_RETURN);
+
+    // small delay to ensure clipboard is used by the target application
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Restore old clipboard content
+    unsafe {
+        if OpenClipboard(None).is_ok() {
+            EmptyClipboard().ok();
+            if let Some(ref data) = old_data {
+                let h_mem = GlobalAlloc(GMEM_MOVEABLE, data.len() + 1).unwrap();
+                let ptr = GlobalLock(h_mem);
+                if !ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
+                    *(ptr.add(data.len()) as *mut u8) = 0; // null terminate
+                    _ = GlobalUnlock(h_mem);
+                    _ = SetClipboardData(1, Some(HANDLE(h_mem.0)));
+                }
+            }
+            CloseClipboard().ok();
+        }
+    }
 }
 
 fn window_is_poe() -> bool {
@@ -202,6 +262,7 @@ fn window_is_poe() -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn char_to_vk(ch: char) -> Option<VIRTUAL_KEY> {
     match ch {
         'a' | 'A' => Some(VK_A),
@@ -285,6 +346,63 @@ fn send_input_vk(vk: VIRTUAL_KEY) {
     };
 
     let mut inputs = [down, up];
+
+    _ = unsafe { SendInput(&mut inputs, size_of::<INPUT>() as i32) };
+}
+
+fn send_input_ctrl_v() {
+    let mut inputs = [
+        // key down
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_CONTROL,
+                    wScan: 0,
+                    dwFlags: KEYBD_EVENT_FLAGS(0),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_V,
+                    wScan: 0,
+                    dwFlags: KEYBD_EVENT_FLAGS(0),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+        // key up
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_V,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_CONTROL,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
 
     _ = unsafe { SendInput(&mut inputs, size_of::<INPUT>() as i32) };
 }
